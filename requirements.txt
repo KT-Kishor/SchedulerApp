@@ -1,0 +1,4 @@
+Flask==2.3.3
+pandas>=2.3.1
+pyxecm==3.2.6
+hdbcli>=2.15.19

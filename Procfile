@@ -1,0 +1,1 @@
+web: python opentext_to_hana.py
