@@ -2,7 +2,7 @@
 applications:
 - name: opentext-flask-app
   disk-quota: 1024M
-  memory: 1024M        # Increase this from 512M to 1024M
+  memory: 1024M 
   random-route: true
   buildpacks:
   - python_buildpack

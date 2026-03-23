@@ -1,13 +1,20 @@
-from flask import Flask, render_template_string
+from flask import Flask, request, jsonify
 import pandas as pd
 from pyxecm import OTCS
 from hdbcli import dbapi
+import os
+import logging
+
+# Configure Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
 # ---------------- CONFIG ----------------
+# Use environment variables for sensitive data if possible
 FOLDER_NODE_ID = 2209221
-LOCAL_FILE = "./latest_ot_data.csv"
+LOCAL_FILE = "/tmp/latest_ot_data.csv" # Use /tmp for Cloud Foundry write access
 
 OPENTEXT_CONFIG = {
     "protocol": "https",
@@ -49,7 +56,6 @@ def get_connection():
 # ---------------- INSERT CSV INTO DB ----------------
 def insert_csv_into_db():
     df = pd.read_csv(LOCAL_FILE)
-
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -70,6 +76,7 @@ def insert_csv_into_db():
         if int(row.get("TargetFolderNodeID", 0)) not in existing_node_ids
     ]
 
+    count = 0
     if data_to_insert:
         insert_query = """
             INSERT INTO OPENTEXT_DATA (NODE_ID, FOLDERS, NAME, TYPE, CREATED_DATE)
@@ -77,49 +84,54 @@ def insert_csv_into_db():
         """
         cursor.executemany(insert_query, data_to_insert)
         conn.commit()
+        count = len(data_to_insert)
+    
     conn.close()
-    return len(data_to_insert)
+    return count
 
-# ---------------- FLASK ROUTES ----------------
-@app.route("/")
-def home():
-    # Simple HTML with one button
-    html = """
-    <h2>OpenText CSV Import</h2>
-    <form action="/import" method="post">
-        <button type="submit">Import CSV into Database</button>
-    </form>
-    """
-    return render_template_string(html)
+# ---------------- SERVICE ENDPOINTS ----------------
 
-# @app.route("/import", methods=["POST"])
-# def import_csv():
-#     try:
-#         otcs = connect_to_opentext()
-#         download_latest_csv(otcs, FOLDER_NODE_ID)
-#         rows_inserted = insert_csv_into_db()
-#         return f"✅ Process completed! {rows_inserted} new rows inserted."
-#     except Exception as e:
-#         return f"❌ Error: {e}"
+@app.route("/health", methods=["GET"])
+def health():
+    """Simple endpoint to check if the service is running."""
+    return jsonify({"status": "UP"}), 200
 
-# # ---------------- RUN APP ----------------
-# if __name__ == "__main__":
-#     app.run(debug=True)
-
-@app.route("/import", methods=["POST"])
+@app.route("/api/v1/sync", methods=["POST"])
 def import_csv():
+    """
+    Main service endpoint. 
+    Call this from Postman via POST.
+    """
     try:
+        logger.info("Starting OpenText to HANA synchronization...")
+        
+        # 1. Connect and Download
         otcs = connect_to_opentext()
         download_latest_csv(otcs, FOLDER_NODE_ID)
+        
+        # 2. Process and Insert
         rows_inserted = insert_csv_into_db()
-        return f"✅ Process completed! {rows_inserted} new rows inserted."
+        
+        # 3. Return JSON Response
+        return jsonify({
+            "status": "success",
+            "message": "Data synchronization completed",
+            "details": {
+                "new_rows_inserted": rows_inserted,
+                "file_processed": LOCAL_FILE
+            }
+        }), 200
+
     except Exception as e:
-        return f"❌ Error: {e}"
+        logger.error(f"Service Error: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 # ---------------- RUN APP ----------------
-import os
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    # Get port from BTP environment or default to 8080
+    port = int(os.environ.get("PORT", 8080))
+    # host 0.0.0.0 is required for Cloud Foundry
     app.run(host="0.0.0.0", port=port)
-
